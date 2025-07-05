@@ -13,5 +13,6 @@ type Word struct {
 
 type Tag struct {
 	gorm.Model
-	Name string `json:"name"`
+	Name  string `json:"name"`
+	Color string `json:"color,omitempty"` // Optional field for color
 }

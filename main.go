@@ -1,16 +1,24 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"os"
+	"io/ioutil"
+	"time"
 
+	"context"
+	"net/http"
+
+	firebase "firebase.google.com/go"
+	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
-	"gorm.io/driver/postgres"
+	"github.com/zitadel/oidc/v3/pkg/oidc"
+	"google.golang.org/api/option"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"github.com/zitadel/oidc/v3/pkg/client/rs"
 )
 
 type WordDto struct {
@@ -20,20 +28,18 @@ type WordDto struct {
 	Tags        []string `json:"tags"`
 }
 
+var sampleSecretKey = []byte("SecretYouShouldHide")
+
 // WordRepository is now in word_repository.go
 
-var db *sql.DB
-var gormDB *gorm.DB
+var wordRepository *WordRepository
 
 func init() {
 	var err error
 	_ = godotenv.Load()
-	connStr := os.Getenv("DB_CONN_STRING")
-	if connStr == "" {
-		panic("DB_CONN_STRING environment variable not set")
-	}
+
 	// Initialize GORM
-	gormDB, err = gorm.Open(postgres.Open(connStr), &gorm.Config{})
+	gormDB, err := gorm.Open(sqlite.Open("test.db"), &gorm.Config{})
 	if err != nil {
 		panic(err)
 	}
@@ -43,10 +49,48 @@ func init() {
 		panic(err)
 	}
 	// Optionally keep the old sql.DB for legacy code
-	db, err = sql.Open("postgres", connStr)
+
+	wordRepository, _ = NewWordRepository(gormDB)
+}
+
+func ValidateToken(ctx context.Context, issuer, audience, rawToken string) (*oidc.IDTokenClaims, error) {
+	rs]()
+	verifier := oidc.NewIDTokenVerifier(
+		issuer,
+		keySet,
+		oidc.WithAudience(audience),
+	)
+	idToken, err := verifier.Verify(ctx, rawToken)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
+	var claims oidc.IDTokenClaims
+	if err := idToken.Claims(&claims); err != nil {
+		return nil, err
+	}
+	return &claims, nil
+}
+
+func ValidateFirebaseToken(token string) (string, error) {
+	serviceAccountJSON, err := ioutil.ReadFile("./firebase.json")
+	if err != nil {
+		return "", fmt.Errorf("error reading service account file: %v", err)
+	}
+
+	app, err := firebase.NewApp(context.Background(), nil, option.WithCredentialsJSON(serviceAccountJSON))
+	if err != nil {
+		return "", fmt.Errorf("error initializing Firebase app: %v", err)
+	}
+
+	client, err := app.Auth(context.Background())
+	if err != nil {
+		return "", fmt.Errorf("error getting Firebase Auth client: %v", err)
+	}
+	tokenInfo, err := client.VerifyIDToken(context.Background(), token)
+	if err != nil {
+		return "", fmt.Errorf("error verifying ID token: %v", err)
+	}
+	return tokenInfo.UID, nil
 }
 
 func saveWordHandler(w http.ResponseWriter, r *http.Request) {
@@ -68,10 +112,12 @@ func saveWordHandler(w http.ResponseWriter, r *http.Request) {
 		tag := Tag{Name: tagName}
 		dbWord.Tags = append(dbWord.Tags, tag)
 	}
-	if err := gormDB.Create(&dbWord).Error; err != nil {
+
+	if err := wordRepository.Create(&dbWord); err != nil {
 		http.Error(w, "Failed to save word", http.StatusInternalServerError)
 		return
 	}
+
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -80,6 +126,7 @@ func (w Word) ConvertToDto() WordDto {
 	for i, t := range w.Tags {
 		tags[i] = t.Name
 	}
+
 	return WordDto{
 		Id:          w.Model.ID,
 		Original:    w.Original,
@@ -93,12 +140,13 @@ func getWordsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var words []Word
-	err := gormDB.Preload("Tags").Find(&words).Error
+
+	words, err := wordRepository.GetAll()
 	if err != nil {
 		http.Error(w, "Failed to fetch words", http.StatusInternalServerError)
 		return
 	}
+
 	var result []WordDto
 	for _, w := range words {
 		result = append(result, w.ConvertToDto())
@@ -122,21 +170,96 @@ func wordsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func deleteAllWords(w http.ResponseWriter) bool {
-	if err := gormDB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&Word{}).Error; err != nil {
-		http.Error(w, "Failed to delete words", http.StatusInternalServerError)
-		return true
-	}
+	wordRepository.DeleteAll()
+
 	w.WriteHeader(http.StatusNoContent)
 	return false
 }
 
-func main() {
-	http.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "Hello, World!")
+func jwtHandler(w http.ResponseWriter, r *http.Request) {
+
+	// var tokenEncodeString string = "something"
+	token := jwt.New(jwt.SigningMethodHS256)
+	claims := token.Claims.(jwt.MapClaims)
+	claims["exp"] = time.Now().Add(100 * time.Minute).Unix()
+	claims["authorized"] = true
+	claims["user"] = "username"
+
+	tokenString, err := token.SignedString(sampleSecretKey)
+	if err != nil {
+		http.Error(w, "Error creating token"+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	response := map[string]string{"token": tokenString}
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, "Error encoding response", http.StatusInternalServerError)
+		return
+	}
+
+}
+
+func authenticationMiddleware(c *gin.Context) {
+	authHeader := c.GetHeader("Authorization")
+	var tokenString string
+	if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+		tokenString = authHeader[7:]
+	} else {
+		tokenString = ""
+	}
+	if tokenString == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header is required"})
+		c.Abort()
+		return
+	}
+
+	// token, err := verifyToken(tokenString)
+	token, err := ValidateToken(c.Request.Context(), "https://your-issuer.com", "your-audience", tokenString)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+		c.Abort()
+		return
+	}
+
+	fmt.Printf("Token verified successfully: %v\n", token)
+
+	c.Next()
+
+}
+
+func verifyToken(tokenString string) (*jwt.Token, error) {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		return sampleSecretKey, nil
 	})
 
-	http.HandleFunc("/words", wordsHandler)
+	if err != nil {
+		return nil, err
+	}
 
+	if !token.Valid {
+		return nil, fmt.Errorf("invalid token")
+	}
+	return token, nil
+
+}
+
+func main() {
+	router := gin.Default()
+
+	router.GET("/hello", authenticationMiddleware, func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"message": "Hello, World!"})
+	})
+
+	router.POST("/words", func(c *gin.Context) {
+		wordsHandler(c.Writer, c.Request)
+	})
+	router.GET("/jwt", func(c *gin.Context) {
+		jwtHandler(c.Writer, c.Request)
+	})
+
+	router.Run(":8080")
 	fmt.Println("Server running on :8080")
-	http.ListenAndServe(":8080", nil)
+
 }
