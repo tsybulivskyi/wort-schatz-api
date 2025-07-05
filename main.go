@@ -252,6 +252,11 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"message": "Hello, World!"})
 	})
 
+	// Health check endpoint
+	router.GET("/healthz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
 	router.POST("/words", func(c *gin.Context) {
 		wordsHandler(c.Writer, c.Request)
 	})
