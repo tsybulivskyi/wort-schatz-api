@@ -1,0 +1,28 @@
+### Test POST /words endpoint
+POST http://localhost:8080/words
+Content-Type: application/json
+
+{
+  "original": "Hallo",
+  "translation": "Hello",
+  "tags": ["greeting", "common"]
+}
+
+### Test GET /hello with token
+GET http://localhost:8080/hello
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdXRob3Jizem9yY2VkIjp0cnVlLCJleHAiOjE3NTE0ODg3NTQsInVzZXIiOiJ1c2VybmFtZSJ9.8b5eu9i1sMZhDOj1RPRfMAIetNZ4FerNwo8P65Jg4OM
+
+### Test GET /words endpoint
+GET http://localhost:8080/words
+Accept: application/json
+
+### Test GEt /jwt endpoint
+GET http://localhost:8080/jwt
+Accept: application/json
+
+### Test GET /healthz endpoint
+GET http://localhost:8080/healthz
+Accept: application/json
+
+GET https://securetoken.google.com/wort-schatz-f60d0/.well-known/jwks.json
+Accept: application/json

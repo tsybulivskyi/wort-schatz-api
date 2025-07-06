@@ -3,22 +3,16 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"time"
 
-	"context"
 	"net/http"
 
-	firebase "firebase.google.com/go"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
-	"github.com/zitadel/oidc/v3/pkg/oidc"
-	"google.golang.org/api/option"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	"github.com/zitadel/oidc/v3/pkg/client/rs"
 )
 
 type WordDto struct {
@@ -27,8 +21,6 @@ type WordDto struct {
 	Translation string   `json:"translation"`
 	Tags        []string `json:"tags"`
 }
-
-var sampleSecretKey = []byte("SecretYouShouldHide")
 
 // WordRepository is now in word_repository.go
 
@@ -51,46 +43,6 @@ func init() {
 	// Optionally keep the old sql.DB for legacy code
 
 	wordRepository, _ = NewWordRepository(gormDB)
-}
-
-func ValidateToken(ctx context.Context, issuer, audience, rawToken string) (*oidc.IDTokenClaims, error) {
-	rs]()
-	verifier := oidc.NewIDTokenVerifier(
-		issuer,
-		keySet,
-		oidc.WithAudience(audience),
-	)
-	idToken, err := verifier.Verify(ctx, rawToken)
-	if err != nil {
-		return nil, err
-	}
-	var claims oidc.IDTokenClaims
-	if err := idToken.Claims(&claims); err != nil {
-		return nil, err
-	}
-	return &claims, nil
-}
-
-func ValidateFirebaseToken(token string) (string, error) {
-	serviceAccountJSON, err := ioutil.ReadFile("./firebase.json")
-	if err != nil {
-		return "", fmt.Errorf("error reading service account file: %v", err)
-	}
-
-	app, err := firebase.NewApp(context.Background(), nil, option.WithCredentialsJSON(serviceAccountJSON))
-	if err != nil {
-		return "", fmt.Errorf("error initializing Firebase app: %v", err)
-	}
-
-	client, err := app.Auth(context.Background())
-	if err != nil {
-		return "", fmt.Errorf("error getting Firebase Auth client: %v", err)
-	}
-	tokenInfo, err := client.VerifyIDToken(context.Background(), token)
-	if err != nil {
-		return "", fmt.Errorf("error verifying ID token: %v", err)
-	}
-	return tokenInfo.UID, nil
 }
 
 func saveWordHandler(w http.ResponseWriter, r *http.Request) {
@@ -250,11 +202,6 @@ func main() {
 
 	router.GET("/hello", authenticationMiddleware, func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "Hello, World!"})
-	})
-
-	// Health check endpoint
-	router.GET("/healthz", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
 	router.POST("/words", func(c *gin.Context) {
